@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RadioCov - Pure Radio Frequency Coverage & Spectrum LoS Engine</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- KaTeX CSS for LaTeX Math Rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" />
+  <!-- RadioCov Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css?v=3" />
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">📡</span>
+      <span class="brand-title">RadioCov</span>
+      <span class="brand-badge">Pure RF Spectrum Engine</span>
+    </div>
+
+    <div class="header-actions">
+      <!-- Quick Location Presets -->
+      <label for="locationPreset" style="margin-bottom:0; font-size:12px; color:#cbd5e1;">Location Preset:</label>
+      <select id="locationPreset" style="width: 220px;" onchange="onLocationPresetChange()">
+        <option value="">-- Custom Coordinates --</option>
+      </select>
+
+      <!-- Technology & Transceiver System Preset -->
+      <label for="techSystemSelect" style="margin-bottom:0; font-size:12px; color:#cbd5e1;">Technology & System:</label>
+      <select id="techSystemSelect" style="width: 280px;" onchange="onTechnologySystemChange()">
+        <option value="custom">-- Custom Frequency / Transceiver --</option>
+        <option value="SSR_RADAR" selected>SSR Radar / Mode S & ADS-B (1030 / 1090 MHz)</option>
+        <option value="AIRBAND_VHF">Aviation VHF Airband AM (Voice & Data)</option>
+        <option value="LDACS">LDACS (L-band Digital Aeronautical Communications)</option>
+        <option value="CELLULAR_5G">5G NR Cellular (Sub-6 GHz FR1 - Bands n78 & n28)</option>
+        <option value="TETRA_PMR">PMR / TETRA Public Safety (380 / 390 MHz)</option>
+        <option value="MICROWAVE_BACKHAUL">Point-to-Point Microwave Backhaul (13 GHz FDD)</option>
+      </select>
+
+      <!-- Physics & Logic Modal Trigger -->
+      <button class="btn btn-secondary" onclick="openLogicModal()" style="display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:6px 14px; margin-left:6px;" title="View RF Physics Formulas and Coverage Logic">
+        <span style="font-size:14px;">📐</span> RF Physics & Formulas
+      </button>
+
+      <!-- Session Export & Import Buttons -->
+      <div style="display:inline-flex; align-items:center; gap:5px; margin-left:8px; border-left:1px solid rgba(255,255,255,0.15); padding-left:8px;">
+        <button class="btn btn-secondary" onclick="exportSessionJson()" style="display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:6px 12px;" title="Export current coverage setup, technology & link budget as a JSON session file">
+          <span>📤</span> Export Session
+        </button>
+        <button class="btn btn-secondary" onclick="triggerImportSession()" style="display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:6px 12px;" title="Import a previously saved RadioCov JSON session">
+          <span>📥</span> Import Session
+        </button>
+        <input type="file" id="sessionFileInput" accept=".json,application/json" onchange="handleSessionFileSelected(event)" style="display:none;" />
+      </div>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="app-body">
+    <!-- Sidebar -->
+    <aside class="app-sidebar">
+      <!-- 1. Transmitter Parameters -->
+      <div class="sidebar-section">
+        <div class="section-title">📍 Transmitter Location</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Latitude (°N)</label>
+            <input type="number" id="txLat" value="47.4211" step="0.0001" />
+          </div>
+          <div class="form-group">
+            <label>Longitude (°E)</label>
+            <input type="number" id="txLon" value="10.9853" step="0.0001" />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 8px;">
+          <div class="form-group">
+            <label>Antenna Altitude AMSL (ft)</label>
+            <input type="number" id="txAltFt" value="9718" step="10" oninput="onTxAltFtInput(this.value)" />
+          </div>
+          <div class="form-group">
+            <label>Altitude (m)</label>
+            <input type="number" id="txAltM" value="2962" step="1" readonly style="opacity:0.8;" />
+          </div>
+        </div>
+        <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+          💡 Tip: Click anywhere on the 2D map to set the transmitter location.
+        </div>
+      </div>
+
+      <!-- 2. Coverage Range & Atmosphere -->
+      <div class="sidebar-section">
+        <div class="section-title">🌐 Propagation Parameters</div>
+        <div class="form-group">
+          <div class="slider-container">
+            <label style="margin-bottom:0;">Max Range</label>
+            <input type="range" id="rangeKm" min="10" max="300" step="5" value="100" oninput="updateRangeLabel(this.value)" />
+            <span class="slider-value" id="rangeKmVal">100 km</span>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <div class="slider-container">
+            <label style="margin-bottom:0;" title="Atmospheric refraction multiplier (Standard = 1.333, Optical = 1.0, Ducting > 1.6)">k-Factor</label>
+            <input type="range" id="kFactor" min="0.8" max="2.0" step="0.05" value="1.333" oninput="updateKFactorLabel(this.value)" />
+            <span class="slider-value" id="kFactorVal">1.33</span>
+          </div>
+        </div>
+
+        <!-- Position Confusion / Compound Masking Toggle -->
+        <div style="margin-top: 10px; padding: 8px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 0;" title="Toggle compound obstacle masking for EU-DEM/GPS position confusion">
+              <input type="checkbox" id="toggleCompoundMask" checked onchange="onCompoundMaskToggle(this.checked)" />
+              <span style="font-size: 11px; font-weight: 600; color: #fff;">Compound / DEM Alignment</span>
+            </label>
+            <span id="compoundMaskBadge" style="font-size: 10px; color: var(--accent-cyan); font-weight: 700; background: rgba(6, 182, 212, 0.15); border: 1px solid rgba(6, 182, 212, 0.3); padding: 1px 6px; border-radius: 3px;">50 m</span>
+          </div>
+          <div style="font-size: 9.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.3;">
+            Tolerates EU-DEM / map position confusion & masks compound mast terrain.
+          </div>
+          <div id="compoundMaskSliderContainer" style="margin-top: 6px;">
+            <div class="slider-container">
+              <label style="font-size: 10px; margin-bottom: 0;">Ignored Radius</label>
+              <input type="range" id="compoundRadiusM" min="25" max="100" step="5" value="50" oninput="onCompoundRadiusInput(this.value)" />
+              <span class="slider-value" id="compoundRadiusVal" style="color: var(--accent-cyan); font-size: 10px;">50 m</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 8.5px; color: var(--text-dim); margin-top: 2px;">
+              <span>25m (Tight)</span>
+              <span>50m (Std)</span>
+              <span>100m (Compound)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Technology & Transceiver Channel Criteria -->
+      <div class="sidebar-section">
+        <div class="section-title">⚡ Transceiver Technology & Channel</div>
+        
+        <div class="form-group">
+          <label>Active Technology System</label>
+          <select id="techSelectSidebar" style="width:100%;" onchange="onSidebarTechSelectChange()">
+            <option value="custom">-- Custom Frequency / Transceiver --</option>
+            <option value="SSR_RADAR" selected>SSR Radar / Mode S & ADS-B (1030 / 1090 MHz)</option>
+            <option value="AIRBAND_VHF">Aviation VHF Airband AM (Voice & Data)</option>
+            <option value="LDACS">LDACS (L-band Digital Aeronautical Communications)</option>
+            <option value="CELLULAR_5G">5G NR Cellular (Sub-6 GHz FR1 - Bands n78 & n28)</option>
+            <option value="TETRA_PMR">PMR / TETRA Public Safety (380 / 390 MHz)</option>
+            <option value="MICROWAVE_BACKHAUL">Point-to-Point Microwave Backhaul (13 GHz FDD)</option>
+          </select>
+        </div>
+
+        <!-- Frequency Channel Pills for this technology -->
+        <div id="techChannelPillsContainer" style="margin-top:8px;">
+          <label style="font-size:10.5px; color:var(--text-muted); margin-bottom:4px;">Channel / Frequency to Assess:</label>
+          <div id="techChannelPills" style="display:flex; flex-direction:column; gap:4px;">
+            <!-- Dynamic channel radio/pill buttons -->
+          </div>
+        </div>
+
+        <div class="form-row" style="margin-top:8px;">
+          <div class="form-group">
+            <label>Carrier Freq (MHz)</label>
+            <input type="number" id="freqMhz" value="1090" step="0.1" oninput="onFreqChange()" />
+          </div>
+          <div class="form-group">
+            <label>Wavelength (&lambda;)</label>
+            <input type="text" id="wavelengthLabel" value="27.5 cm" readonly style="opacity:0.8;" />
+          </div>
+        </div>
+
+        <!-- Quick Link Budget Metric Badge in Sidebar -->
+        <div id="sidebarMaplBox" style="background:rgba(15, 23, 42, 0.75); border:1px solid var(--border-color); border-radius:6px; padding:9px 10px; margin-top:8px;">
+          <!-- Top Row: MAPL Title and Value -->
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:5px;">
+            <span style="font-size:10px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Max Allowable Path Loss (MAPL):</span>
+            <span id="sidebarMaplVal" style="font-size:13px; font-weight:800; color:var(--accent-cyan);">149.0 dB</span>
+          </div>
+
+          <!-- Formula reminder -->
+          <div style="font-size:9.5px; color:var(--text-muted); margin-bottom:6px; padding:2px 6px; background:rgba(0,0,0,0.25); border-radius:3px; font-family:monospace; display:flex; justify-content:space-between; align-items:center;">
+            <span>MAPL = P<sub>tx</sub> + G<sub>tx</sub> + G<sub>rx</sub> &minus; S<sub>rx</sub> &minus; Fade</span>
+          </div>
+
+          <!-- Link parameters breakdown (Tx Power, Tx Gain, Rx Gain, Rx Sens, Fade) -->
+          <div style="font-size:10.5px; display:grid; grid-template-columns: 1fr 1fr; gap:3px 8px;">
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted);">Tx Power (P<sub>tx</sub>):</span>
+              <span id="sidebarTxPowerVal" style="font-weight:600; color:#fff;">+54.0 dBm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted);">Tx Gain (G<sub>tx</sub>):</span>
+              <span id="sidebarTxGainVal" style="font-weight:600; color:#38bdf8;">+12.0 dBi</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted);">Rx Sens (S<sub>rx</sub>):</span>
+              <span id="sidebarRxSensVal" style="font-weight:600; color:#fff;">-90.0 dBm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted);">Rx Gain (G<sub>rx</sub>):</span>
+              <span id="sidebarRxGainVal" style="font-weight:600; color:#38bdf8;">+3.0 dBi</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; grid-column:span 2; border-top:1px dashed rgba(255,255,255,0.08); padding-top:3px; margin-top:2px;">
+              <span style="color:var(--text-muted);">Fade Margin:</span>
+              <span id="sidebarFadeVal" style="font-weight:600; color:#f43f5e;">10.0 dB</span>
+            </div>
+          </div>
+
+          <!-- Exact Arithmetic Calculation Line -->
+          <div id="sidebarMaplCalcLine" style="font-size:9.5px; color:#94a3b8; margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.06); font-family:monospace; text-align:right;">
+            54.0 + 12.0 + 3.0 &minus; (&minus;90.0) &minus; 10.0 = <b style="color:var(--accent-cyan);">149.0 dB</b>
+          </div>
+          <!-- Hidden fallback element for backward compatibility if queried -->
+          <span id="sidebarTxRxVal" style="display:none;"></span>
+        </div>
+
+        <!-- Frequency Sweep Toggle -->
+        <div style="margin-top: 10px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="enableFreqSweep" onchange="toggleSweepInputs()" />
+            <span style="font-size:11px; color:#fff;">Enable Wide Spectrum Sweep</span>
+          </label>
+        </div>
+
+        <div id="freqSweepBox" style="display: none; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.25); border-radius:4px; border:1px solid var(--border-color);">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Min (MHz)</label>
+              <input type="number" id="sweepMinMhz" value="100" step="50" />
+            </div>
+            <div class="form-group">
+              <label>Max (MHz)</label>
+              <input type="number" id="sweepMaxMhz" value="2000" step="100" />
+            </div>
+            <div class="form-group">
+              <label>Step (MHz)</label>
+              <input type="number" id="sweepStepMhz" value="300" step="50" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. 1,000-ft Cube Altitude Grid -->
+      <div class="sidebar-section">
+        <div class="section-title">🧊 1,000-ft Airspace Voxel Grid</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Min Altitude (ft)</label>
+            <input type="number" id="minAltFt" value="1000" step="1000" />
+          </div>
+          <div class="form-group">
+            <label>Max Altitude (ft)</label>
+            <input type="number" id="maxAltFt" value="25000" step="1000" />
+          </div>
+        </div>
+        <div style="font-size: 10px; color: var(--text-dim); margin-top: 4px;">
+          Standard voxel resolution: <b>1,000 ft cube intervals</b>
+        </div>
+      </div>
+
+      <!-- 5. Interactive Slicing Controls -->
+      <div class="sidebar-section">
+        <div class="section-title">📐 Interactive Slices</div>
+        <div class="form-group">
+          <div class="slider-container">
+            <label style="margin-bottom:0;" title="Select altitude layer for 2D horizontal slice">Alt Slice</label>
+            <input type="range" id="altSliceFt" min="1000" max="30000" step="1000" value="10000" oninput="onAltSliceInput(this.value)" />
+            <span class="slider-value" id="altSliceVal" style="color:var(--accent-cyan);">10,000 ft</span>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <div class="slider-container">
+            <label style="margin-bottom:0;" title="Select bearing radial for vertical cross-section">Radial Az</label>
+            <input type="range" id="radialBearing" min="0" max="355" step="5" value="45" oninput="onRadialBearingInput(this.value)" />
+            <span class="slider-value" id="radialBearingVal" style="color:var(--accent-cyan);">045°</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Calculate Button -->
+      <div class="sidebar-section" style="border-bottom:none; padding-bottom:6px;">
+        <button class="btn btn-primary btn-block" onclick="calculateCoverage()" style="height: 38px; font-size: 13px;">
+          <span>⚡ Calculate Spectrum Coverage</span>
+        </button>
+      </div>
+
+      <!-- Session JSON Actions in Sidebar -->
+      <div class="sidebar-section" style="border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;">
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary" onclick="exportSessionJson()" style="flex:1; font-size:11px; padding:5px 4px; display:inline-flex; align-items:center; justify-content:center; gap:4px;" title="Export current session setup as JSON">
+            <span>📤</span> Export JSON
+          </button>
+          <button class="btn btn-secondary" onclick="triggerImportSession()" style="flex:1; font-size:11px; padding:5px 4px; display:inline-flex; align-items:center; justify-content:center; gap:4px;" title="Import session from JSON">
+            <span>📥</span> Import JSON
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="app-content">
+      <!-- Tabs Navigation -->
+      <div class="tabs-bar">
+        <button class="tab-btn active" onclick="switchTab('mapTab')">🗺️ 2D Map (Horizontal Slice)</button>
+        <button class="tab-btn" onclick="switchTab('profileTab')">⛰️ Vertical Profile (Radial)</button>
+        <button class="tab-btn" onclick="switchTab('threeTab')">🧊 3D 1,000-ft Cubes (WebGL)</button>
+        <button class="tab-btn" onclick="switchTab('techBudgetTab')">⚡ Technology & Link Budget</button>
+        <button class="tab-btn" onclick="switchTab('sweepTab')">📈 Spectrum Sweep</button>
+
+        <!-- Current Coverage Stat Badge -->
+        <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+          <span style="font-size:11px; color:var(--text-muted);">Horizontal Coverage at <span id="badgeSliceAlt">10,000 ft</span>:</span>
+          <span id="badgeCoveragePct" style="font-size:13px; font-weight:700; color:var(--accent-green); background:rgba(34, 197, 94, 0.15); border:1px solid rgba(34, 197, 94, 0.4); padding:2px 8px; border-radius:4px;">--%</span>
+        </div>
+      </div>
+
+      <!-- Tab 1: 2D Map & Horizontal Slice -->
+      <div id="mapTab" class="view-panel active">
+        <div id="mapContainer"></div>
+      </div>
+
+      <!-- Tab 2: Vertical Profile (Radial Cross-Section) -->
+      <div id="profileTab" class="view-panel">
+        <div class="profile-view-container">
+          <div class="canvas-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:13px; font-weight:700; color:#fff;">
+                  Vertical RF Cross-Section along Radial <span id="profBearingTitle" style="color:var(--accent-cyan);">045°</span>
+                </span>
+                <span id="profBlockageBadge" style="font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px; display:none;"></span>
+              </div>
+              <!-- Profile Legend -->
+              <div style="display:flex; align-items:center; gap:12px; font-size:11px;">
+                <span class="legend-pill"><span class="dot" style="background:#8b5cf6;"></span>Direct LOS Ray</span>
+                <span class="legend-pill"><span class="dot" style="background:#22c55e;"></span>1st Fresnel Envelope</span>
+                <span class="legend-pill"><span class="dot" style="background:#eab308;"></span>Earth Bulge (k=1.33)</span>
+                <span class="legend-pill"><span class="dot" style="background:#64748b;"></span>EU-DEM Terrain</span>
+                <span class="legend-pill"><span class="dot" style="background:#ef4444;"></span>Blockage / Obstacle</span>
+              </div>
+            </div>
+
+            <canvas id="radialProfileCanvas"></canvas>
+            <div id="profileStats" style="font-size:11px; color:var(--text-muted); margin-top:6px; min-height:18px;">
+              Hover along cross-section to inspect terrain height, LOS ray altitude, and obstacle clearance.
+            </div>
+          </div>
+
+          <!-- Path Summary Metrics -->
+          <div class="stats-grid" id="pathStatsGrid">
+            <div class="stat-box">
+              <div class="stat-box-title">LOS Status</div>
+              <div class="stat-box-val" id="statLosStatus" style="color:var(--accent-green);">CLEAR</div>
+            </div>
+            <div class="stat-box" id="boxBlockageDist" style="border-left: 2px solid #ef4444;">
+              <div class="stat-box-title">Blockage Distance</div>
+              <div class="stat-box-val" id="statBlockageDist" style="color:var(--accent-green);">NONE (CLEAR)</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-title">Min Clearance</div>
+              <div class="stat-box-val" id="statMinClearance">-- m</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-title">Fresnel Ratio</div>
+              <div class="stat-box-val" id="statFresnelRatio">--</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-title">Diffraction Loss</div>
+              <div class="stat-box-val" id="statDiffLoss">0.0 dB</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-title">Free Space Loss</div>
+              <div class="stat-box-val" id="statFspl">-- dB</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-box-title">Total Path Loss</div>
+              <div class="stat-box-val" id="statTotalLoss" style="color:var(--accent-cyan);">-- dB</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: 3D Volumetric 1,000-ft Cubes (WebGL / Three.js) -->
+      <div id="threeTab" class="view-panel" style="position:relative;">
+        <div id="threeContainer"></div>
+
+        <!-- 3D Compass Rose / North Indicator HUD -->
+        <div class="three-compass-hud" onclick="resetThreeView()" title="Click to align 3D view with North">
+          <div class="compass-dial">
+            <div id="compassNeedle" class="compass-needle">
+              <div class="needle-tip-n">▲</div>
+              <div class="needle-text-n">N</div>
+              <div class="needle-tip-s">▼</div>
+            </div>
+          </div>
+          <div class="compass-label">NORTH</div>
+        </div>
+
+        <div class="three-overlay" style="min-width:210px; max-width:235px;">
+          <div style="font-weight:700; color:#fff; border-bottom:1px solid var(--border-color); padding-bottom:4px;">3D Volumetric Controls</div>
+          <div>Rotate: <b>Left Click + Drag</b></div>
+          <div>Pan: <b>Right Click + Drag</b></div>
+          <div>Zoom: <b>Mouse Wheel</b></div>
+
+          <!-- Max Altitude Ceiling Selector -->
+          <div style="margin-top:4px; border-top:1px solid rgba(255,255,255,0.08); padding-top:6px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+              <label style="font-size:10.5px; font-weight:600; color:#fff;">Max Altitude Ceiling:</label>
+              <b id="threeMaxAltLabel" style="font-size:11px; color:var(--accent-cyan);">20,000 ft</b>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <button type="button" class="btn btn-secondary" onclick="stepThreeMaxAlt(-1000)" style="padding:1px 6px; font-size:10px; font-weight:700;" title="Lower ceiling by 1,000 ft">-1k</button>
+              <input type="range" id="threeMaxAltSlider" min="2000" max="30000" step="1000" value="20000" oninput="onThreeMaxAltChange(this.value)" style="flex:1; cursor:pointer;" />
+              <button type="button" class="btn btn-secondary" onclick="stepThreeMaxAlt(1000)" style="padding:1px 6px; font-size:10px; font-weight:700;" title="Raise ceiling by 1,000 ft">+1k</button>
+            </div>
+            <div id="threeCubeCountLabel" style="font-size:9.5px; color:var(--text-muted); margin-top:3px; text-align:right;">
+              Hiding cubes above ceiling
+            </div>
+          </div>
+
+          <div style="margin-top:2px;">
+            <label style="font-size:10px;">Z-Axis Vertical Exaggeration:</label>
+            <input type="range" id="threeZScale" min="1" max="15" step="1" value="5" oninput="updateThreeZScale(this.value)" style="width:100%; cursor:pointer;" />
+          </div>
+          <div style="margin-top:4px; display:flex; flex-direction:column; gap:4px; font-size:11px;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" id="threeShowBlocked" onchange="toggleThreeBlockedCubes(this.checked)" />
+              <span>Show Blocked Cubes (Red)</span>
+            </label>
+          </div>
+          <div style="margin-top:6px;">
+            <button class="btn btn-secondary" onclick="resetThreeView()" style="width:100%; padding:4px 8px; font-size:11px;">↺ Reset 3D View</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+            <span class="legend-pill"><span class="dot dot-green"></span>LOS Cleared Cube</span>
+            <span class="legend-pill"><span class="dot dot-red"></span>Blocked / Shadow</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 4: Technology System & Link Budget Assessment -->
+      <div id="techBudgetTab" class="view-panel">
+        <div style="padding:16px; overflow-y:auto; height:100%;">
+          
+          <!-- System Metadata Header Card -->
+          <div class="canvas-card" style="margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">
+              <div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <h3 id="tbSystemTitle" style="font-size:16px; margin:0; color:#fff; font-weight:700;">SSR Radar / Mode S & ADS-B (1030 / 1090 MHz)</h3>
+                  <span id="tbSystemCategory" class="formula-badge">Aviation Surveillance & IFF</span>
+                </div>
+                <div id="tbSystemStandard" style="font-size:11px; color:var(--accent-cyan); margin-top:2px;">Standard: ICAO Annex 10 Vol IV / EUROCAE ED-102B</div>
+                <div id="tbSystemDesc" style="font-size:12px; color:var(--text-muted); margin-top:4px; max-width:800px;">
+                  Secondary Surveillance Radar interrogator (1030 MHz) and transponder / ADS-B reply (1090 MHz).
+                </div>
+              </div>
+
+              <!-- Quick Technology Switcher & Target Summary -->
+              <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <label for="tbTechSelect" style="font-size:11px; color:#cbd5e1; margin-bottom:0; font-weight:600;">Switch Technology:</label>
+                  <select id="tbTechSelect" style="width:260px; font-size:11px; padding:4px 8px;" onchange="onTbTechSelectChange()">
+                    <option value="custom">-- Custom Frequency / Transceiver --</option>
+                    <option value="SSR_RADAR" selected>SSR Radar / Mode S & ADS-B (1030 / 1090 MHz)</option>
+                    <option value="AIRBAND_VHF">Aviation VHF Airband AM (Voice & Data)</option>
+                    <option value="LDACS">LDACS (L-band Digital Aeronautical Communications)</option>
+                    <option value="CELLULAR_5G">5G NR Cellular (Sub-6 GHz FR1 - Bands n78 & n28)</option>
+                    <option value="TETRA_PMR">PMR / TETRA Public Safety (380 / 390 MHz)</option>
+                    <option value="MICROWAVE_BACKHAUL">Point-to-Point Microwave Backhaul (13 GHz FDD)</option>
+                  </select>
+                </div>
+                <!-- Target Assessment Summary Pill -->
+                <div style="background:rgba(15, 23, 42, 0.85); border:1px solid var(--border-color); border-radius:6px; padding:6px 12px; font-size:11px;">
+                  <span style="color:var(--text-muted);">Ray:</span>
+                  <span style="font-weight:700; color:#fff;">
+                    <span id="tbTargetRange" style="color:var(--accent-blue);">100 km</span> &middot; 
+                    <span id="tbTargetBearing" style="color:var(--accent-cyan);">045°</span> &middot; 
+                    <span id="tbTargetAlt" style="color:var(--accent-green);">10,000 ft</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Channel Link Cards Grid -->
+          <div id="tbChannelCardsContainer" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap:14px; margin-bottom:14px;">
+            <!-- Populated dynamically per frequency channel -->
+          </div>
+
+          <!-- System Link Balance & Bottleneck Analysis Card -->
+          <div class="canvas-card">
+            <div style="font-size:13px; font-weight:700; color:#fff; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+              <span>⚖️</span> System Link Balance & Operating Limits
+            </div>
+            <div id="tbBalanceSummary" style="font-size:12px; color:var(--text-main); line-height:1.6;">
+              <!-- Dynamic comparison -->
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Tab 5: Spectrum Sweep Comparison -->
+      <div id="sweepTab" class="view-panel">
+        <div style="padding:16px; overflow-y:auto; height:100%;">
+          
+          <!-- Transceiver Technology & Link Budget Config -->
+          <div class="canvas-card" style="margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid var(--border-color); padding-bottom:6px;">
+              <div style="font-size:13px; font-weight:700; color:#fff; display:flex; align-items:center; gap:8px;">
+                <span>⚡</span> Transceiver Technology & Link Budget Parameters
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <label style="font-size:11px; color:#cbd5e1; margin-bottom:0;">Technology Preset:</label>
+                <select id="techPresetSelect" style="width:280px; font-size:11px; padding:4px 8px;" onchange="onTechPresetChange()">
+                  <option value="custom">-- Custom Transceiver Parameters --</option>
+                  <option value="vhf_tactical">Tactical VHF/FM Manpack (5W / -113 dBm)</option>
+                  <option value="fm_broadcast">FM Broadcast Station (50 kW / -98 dBm)</option>
+                  <option value="air_vhf">Aviation VHF AM Voice / Tower (25W / -107 dBm)</option>
+                  <option value="tetra_pmr">PMR / TETRA Public Safety (10W / -115 dBm)</option>
+                  <option value="lora_iot">LoRaWAN / IoT 868 MHz (25mW / -137 dBm)</option>
+                  <option value="adsb_radar" selected>ADS-B / SSR Transponder (250W / -90 dBm)</option>
+                  <option value="cellular_5g">5G Sub-6 Massive MIMO Macro (200W / -98 dBm)</option>
+                  <option value="wifi6e">WiFi 6E/7 Enterprise AP (200mW / -82 dBm)</option>
+                  <option value="microwave_backhaul">Microwave Dish Backhaul (1W / 36dBi / -80 dBm)</option>
+                  <option value="sat_terminal">Ku-Band Satellite Terminal (4W / -95 dBm)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Parameters Grid -->
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; align-items:flex-end;">
+              <div>
+                <label style="font-size:10.5px; color:var(--text-muted);">Tx Power (dBm):</label>
+                <input type="number" id="linkTxPowerDbm" value="54.0" step="1.0" oninput="onLinkBudgetInput()" style="width:100%; font-size:12px; padding:5px 8px;" />
+                <div id="linkTxWattsLabel" style="font-size:10px; color:var(--accent-blue); margin-top:2px;">= 251.2 W</div>
+              </div>
+              <div>
+                <label style="font-size:10.5px; color:var(--text-muted);">Tx Antenna Gain (dBi):</label>
+                <input type="number" id="linkTxGainDbi" value="12.0" step="0.5" oninput="onLinkBudgetInput()" style="width:100%; font-size:12px; padding:5px 8px;" />
+              </div>
+              <div>
+                <label style="font-size:10.5px; color:var(--text-muted);">Rx Antenna Gain (dBi):</label>
+                <input type="number" id="linkRxGainDbi" value="3.0" step="0.5" oninput="onLinkBudgetInput()" style="width:100%; font-size:12px; padding:5px 8px;" />
+              </div>
+              <div>
+                <label style="font-size:10.5px; color:var(--text-muted);">Rx Sensitivity (dBm):</label>
+                <input type="number" id="linkRxSensDbm" value="-90.0" step="1.0" oninput="onLinkBudgetInput()" style="width:100%; font-size:12px; padding:5px 8px;" />
+              </div>
+              <div>
+                <label style="font-size:10.5px; color:var(--text-muted);">Fade Margin (dB):</label>
+                <input type="number" id="linkFadeMarginDb" value="10.0" step="1.0" oninput="onLinkBudgetInput()" style="width:100%; font-size:12px; padding:5px 8px;" />
+              </div>
+              <div style="background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:6px; padding:6px 10px; text-align:center;">
+                <div style="font-size:9.5px; text-transform:uppercase; color:var(--text-muted);">Max Allowable Path Loss (MAPL)</div>
+                <div id="statMaplValue" style="font-size:17px; font-weight:700; color:var(--accent-cyan);">149.0 dB</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chart Card -->
+          <div class="canvas-card" style="margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <div style="font-size:13px; font-weight:700; color:#fff;">Frequency vs Path Loss & MAPL Link Threshold</div>
+              <div style="display:flex; align-items:center; gap:12px; font-size:11px;">
+                <span class="legend-pill"><span class="dot" style="background:#38bdf8;"></span>Total Path Loss (dB)</span>
+                <span class="legend-pill"><span class="dot" style="background:#f43f5e; height:2px; width:12px; border-radius:0;"></span>MAPL Limit</span>
+              </div>
+            </div>
+            <canvas id="sweepChartCanvas" style="width:100%; height:260px; background:#060911; border-radius:4px;"></canvas>
+          </div>
+
+          <!-- Table Card -->
+          <div class="canvas-card">
+            <div style="font-size:13px; font-weight:700; color:#fff; margin-bottom:8px;">Spectrum Sweep & Link Margin Table</div>
+            <table id="sweepTable" style="width:100%; border-collapse:collapse; font-size:11px; text-align:left;">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border-color); color:var(--text-muted);">
+                  <th style="padding:6px;">Frequency (MHz)</th>
+                  <th style="padding:6px;">Wavelength (&lambda;)</th>
+                  <th style="padding:6px;">Path Loss (dB)</th>
+                  <th style="padding:6px;">MAPL Limit (dB)</th>
+                  <th style="padding:6px;">Link Margin (dB)</th>
+                  <th style="padding:6px;">Link Closes?</th>
+                  <th style="padding:6px;">Cube Coverage %</th>
+                </tr>
+              </thead>
+              <tbody id="sweepTableBody">
+                <!-- Dynamic rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading Spinner -->
+      <div id="loadingOverlay" class="spinner-overlay">
+        <div style="text-align:center;">
+          <div style="font-size:32px; animation: spin 1s linear infinite;">⏳</div>
+          <div style="font-size:13px; color:#fff; margin-top:8px;">Computing 3D RF Volumetric Coverage...</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal: RF Propagation Physics, Formulas & Logic -->
+  <div id="logicModal" class="modal-backdrop" onclick="onModalBackdropClick(event)">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div style="background:rgba(56, 189, 248, 0.15); width:38px; height:38px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(56, 189, 248, 0.3);">
+            📐
+          </div>
+          <div>
+            <h2 style="font-size:16px; margin:0; color:#fff; font-weight:700;">RF Propagation Physics & Coverage Logic</h2>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Physical principles, ITU-R recommendations, and 1,000-ft volumetric cube methodology</div>
+          </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeLogicModal()" title="Close (Esc)">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        
+        <!-- Section 1: Core Philosophy -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">1. Core Philosophy</span>
+            Domain-Agnostic Radio Frequency Spectrum Assessment
+          </div>
+          <p class="formula-desc">
+            <b>RadioCov</b> abstracts radio wave propagation completely from domain-specific rules (such as aviation flight rules or cellular cell-site boundaries). Any transceiver in space defined by <b>(Latitude, Longitude, Altitude AMSL)</b> can be evaluated across any frequency band from VHF (30 MHz) through microwave and mmWave (40 GHz). Coverage is discretized into a 3D matrix of <b>1,000-ft cubes</b> above real physical terrain.
+          </p>
+        </div>
+
+        <!-- Section 2: Earth Curvature & Atmospheric Refraction -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">2. Earth Geometry</span>
+            Atmospheric Refraction & Apparent Earth Bulge
+          </div>
+          <p class="formula-desc">
+            Radio waves refract in the Earth's atmosphere due to vertical gradients in temperature, pressure, and humidity. This is modeled using an <b>equivalent Earth radius</b> $R_e$ with a refraction factor $k$:
+          </p>
+          <div class="math-block">
+            $$R_e = k \cdot R_0 \quad \text{where } R_0 = 6,371\text{ km (mean Earth radius)}$$
+          </div>
+          <p class="formula-desc">
+            Under standard atmospheric conditions, <b>$k = 4/3 \approx 1.333$</b> (standard 4/3 Earth model). Across a distance $D$, an obstacle at distance $d_1$ from the transmitter and $d_2$ from the receiver ($d_1 + d_2 = D$) experiences an apparent geometric elevation (Earth bulge):
+          </p>
+          <div class="math-block">
+            $$h_{\text{bulge}} = \frac{d_1 \cdot d_2}{2 R_e} \quad \text{(meters)}$$
+          </div>
+          <p class="formula-desc">
+            The <b>effective terrain obstacle height</b> evaluated against the direct ray is:
+          </p>
+          <div class="math-block">
+            $$h_{\text{effective}}(d) = h_{\text{DEM}}(d) + h_{\text{bulge}}(d)$$
+          </div>
+        </div>
+
+        <!-- Section 3: Fresnel Zones & Line of Sight -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">3. Wave Optics</span>
+            First Fresnel Zone ($F_1$) & Optical vs. Radio LoS
+          </div>
+          <p class="formula-desc">
+            Unlike light, radio waves travel within an ellipsoidal volume between transmitter and receiver. The boundary of the $n$-th Fresnel zone represents paths where the phase length differs by $n \cdot \frac{\lambda}{2}$.
+          </p>
+          <div class="math-block">
+            $$\lambda = \frac{c}{f} \quad \text{where } c = 299,792,458\text{ m/s (speed of light)}$$
+          </div>
+          <div class="math-block">
+            $$F_n = \sqrt{\frac{n \cdot \lambda \cdot d_1 \cdot d_2}{d_1 + d_2}} \quad \implies \quad F_1 = \sqrt{\frac{\lambda \cdot d_1 \cdot d_2}{D}} \quad \text{(meters)}$$
+          </div>
+          <p class="formula-desc">
+            The <b>Fresnel Clearance Ratio</b> $C_r$ compares the vertical clearance $\Delta h = h_{\text{LOS}} - h_{\text{effective}}$ against the 1st Fresnel zone radius:
+          </p>
+          <div class="math-block">
+            $$C_r = \frac{\Delta h}{F_1} = \frac{h_{\text{LOS}} - h_{\text{effective}}}{F_1}$$
+          </div>
+          <div class="criteria-box">
+            <div style="margin-bottom:6px;"><b>• Optical LoS:</b> Satisfied when $\Delta h \ge 0$ (direct line of sight clears physical ground).</div>
+            <div><b>• Radio LoS (ITU-R criteria):</b> Satisfied when <b>$C_r \ge 0.60$</b> ($60\%$ of $F_1$ radius is unobstructed). Below $0.60\,F_1$, diffraction attenuation occurs even if optical LoS is clear.</div>
+          </div>
+        </div>
+
+        <!-- Section 4: Knife-Edge Diffraction Loss (ITU-R P.526) -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">4. Diffraction Physics</span>
+            Knife-Edge Diffraction Attenuation (ITU-R Recommendation P.526)
+          </div>
+          <p class="formula-desc">
+            When terrain encroaches into the 1st Fresnel zone or obstructs the direct line of sight, diffractive signal loss occurs. This is modeled via the dimensionless <b>Fresnel-Kirchhoff diffraction parameter</b> $v$:
+          </p>
+          <div class="math-block">
+            $$v = h_{\text{obs}} \sqrt{\frac{2}{\lambda} \left(\frac{1}{d_1} + \frac{1}{d_2}\right)} = - \Delta h \sqrt{\frac{2}{\lambda} \left(\frac{1}{d_1} + \frac{1}{d_2}\right)}$$
+          </div>
+          <p class="formula-desc" style="font-size:11px; color:var(--text-muted);">
+            • $v < -0.78$: Clearance exceeds $0.6\,F_1 \implies$ Diffraction loss $J(v) = 0\text{ dB}$.<br/>
+            • $v = 0$: Grazing line-of-sight obstacle $\implies J(0) \approx 6.02\text{ dB}$ loss.<br/>
+            • $v > 0$: Obstacle penetrates direct LoS $\implies$ Progressive diffraction attenuation:
+          </p>
+          <div class="math-block">
+            $$J(v) = 6.9 + 20 \log_{10}\left(\sqrt{(v - 0.1)^2 + 1} + v - 0.1\right) \quad \text{dB}$$
+          </div>
+        </div>
+
+        <!-- Section 5: Free-Space Path Loss (FSPL) & Total Loss -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">5. Link Budget</span>
+            Free-Space Path Loss (FSPL) & Total Attenuation
+          </div>
+          <p class="formula-desc">
+            The geometric expansion of the wave-front across 3D free space produces Free-Space Path Loss:
+          </p>
+          <div class="math-block">
+            $$\text{FSPL}(\text{dB}) = 20 \log_{10}(D) + 20 \log_{10}(f) + 20 \log_{10}\left(\frac{4\pi}{c}\right)$$
+          </div>
+          <div class="math-block">
+            $$\text{FSPL}(\text{dB}) = 20 \log_{10}(D_{\text{meters}}) + 20 \log_{10}(f_{\text{Hz}}) - 147.55$$
+          </div>
+          <p class="formula-desc">
+            Total path loss combines free-space divergence with terrain diffraction attenuation:
+          </p>
+          <div class="math-block">
+            $$L_{\text{total}}(\text{dB}) = \text{FSPL}(\text{dB}) + J(v)(\text{dB})$$
+          </div>
+        </div>
+
+        <!-- Section 6: 1,000-ft Airspace Voxel Cube Volumetric Model -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">6. Volumetric Grid</span>
+            1,000-ft Airspace Voxel Cube Architecture
+          </div>
+          <p class="formula-desc">
+            The 3D space surrounding the transmitter is structured into a polar-volumetric voxel lattice:
+          </p>
+          <ul style="margin:6px 0 0 18px; padding:0; font-size:12px; color:var(--text-main); line-height:1.6;">
+            <li><b>Vertical Resolution:</b> Discrete <b>1,000 ft</b> layers ($\Delta z = 304.8\text{ m}$) from user-defined $Alt_{\min}$ to $Alt_{\max}$.</li>
+            <li><b>Azimuthal Radials:</b> Radials spaced uniformly across $[0^\circ, 360^\circ)$ (e.g. 72 radials $= 5^\circ$ angular resolution).</li>
+            <li><b>Radial Range Increments:</b> Step distance $\Delta r$ (e.g. 2.5 km or 5.0 km) up to maximum range.</li>
+            <li><b>3D Cartesian Mapping (Three.js WebGL):</b>
+              <div class="math-block" style="margin: 6px 0;">
+                $$X = r \cdot \sin(\theta), \quad Y = r \cdot \cos(\theta), \quad Z = \text{Alt}_{\text{AMSL}} \cdot s_z$$
+              </div>
+            </li>
+            <li><b>Horizontal Slicing:</b> Extracts the 2D polygon footprint and coverage percentage at any chosen 1,000-ft layer.</li>
+            <li><b>Vertical Slicing:</b> Evaluates the full ray profile, Earth curvature, Fresnel envelope, and obstacle clearance along any radial azimuth.</li>
+          </ul>
+        </div>
+
+        <!-- Section 7: Terrain Sampling (EU-DEM) -->
+        <div class="formula-card">
+          <div class="formula-title">
+            <span class="formula-badge">7. Digital Elevation</span>
+            EU-DEM 25m Resolution Terrain Model
+          </div>
+          <p class="formula-desc">
+            Ground elevation is extracted from the European Copernicus <b>EU-DEM v1.1</b> GeoTIFF raster dataset at 25-meter horizontal resolution (projected in ETRS89-LAEA / EPSG:3035). Coordinate conversions use ellipsoidal geodetic transforms:
+          </p>
+          <div class="math-block">
+            $$(\text{Latitude, Longitude})_{\text{WGS84}} \xleftrightarrow{\text{PyProj / GDAL}} (X, Y)_{\text{EPSG:3035}} \longrightarrow h_{\text{DEM}}(\text{meters})$$
+          </div>
+          <p class="formula-desc">
+            Ray profiles sample terrain elevation via windowed sub-array reads with LRU caching to evaluate hundreds of thousands of path samples with millisecond responsiveness.
+          </p>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <div style="font-size:11px; color:var(--text-muted);">Standardized to ITU-R P.526-15, ITU-R P.834, and EU-DEM 25m.</div>
+        <button class="btn btn-primary" onclick="closeLogicModal()" style="padding:6px 20px; font-size:12px;">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toastNotification" style="display:none; position:fixed; bottom:24px; right:24px; background:rgba(15, 23, 42, 0.95); border:1px solid var(--accent-cyan); color:#fff; padding:10px 18px; border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.5); z-index:9999; font-size:12px; align-items:center; gap:8px; transition:opacity 0.3s ease;">
+    <span id="toastIcon">ℹ️</span>
+    <span id="toastMessage">Message</span>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Three.js + OrbitControls for 3D View -->
+  <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- KaTeX & Auto-Render for LaTeX Math -->
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+  <!-- RadioCov Frontend Logic -->
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>
